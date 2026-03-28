@@ -52,13 +52,7 @@ const DEBUG_KEYWORDS = [
   'remote debug', 'remotedebug',
 ];
 
-// Groups where all tasks should use Opus regardless of prompt content
-const OPUS_GROUPS = ['ha'];
-
-export function selectModel(prompt: string, groupFolder?: string): string {
-  if (groupFolder && OPUS_GROUPS.some((g) => groupFolder.toLowerCase() === g)) {
-    return 'claude-opus-4-6';
-  }
+export function selectModel(prompt: string): string {
   const lower = prompt.toLowerCase();
   if (DEBUG_KEYWORDS.some((kw) => lower.includes(kw))) {
     return 'claude-opus-4-6';
@@ -319,7 +313,7 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
-  const model = selectModel(input.prompt, group.folder);
+  const model = selectModel(input.prompt);
   logger.info({ group: group.name, model }, 'Model selected for task');
   const containerArgs = await buildContainerArgs(
     mounts,
