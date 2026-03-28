@@ -45,6 +45,21 @@ export interface ContainerInput {
   script?: string;
 }
 
+const DEBUG_KEYWORDS = [
+  'debug', 'debuggen', 'debugge', 'debugging',
+  'diagnose', 'diagnos', 'troubleshoot',
+  'fehler such', 'fehlersuche', 'fehlerbehebung',
+  'remote debug', 'remotedebug',
+];
+
+export function selectModel(prompt: string): string {
+  const lower = prompt.toLowerCase();
+  if (DEBUG_KEYWORDS.some((kw) => lower.includes(kw))) {
+    return 'claude-opus-4-6';
+  }
+  return 'claude-haiku-4-5-20251001';
+}
+
 export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
@@ -227,11 +242,17 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  model?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Inject selected model so the SDK inside the container uses the right one
+  if (model) {
+    args.push('-e', `ANTHROPIC_MODEL=${model}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -292,10 +313,13 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
+  const model = selectModel(input.prompt);
+  logger.info({ group: group.name, model }, 'Model selected for task');
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
     agentIdentifier,
+    model,
   );
 
   logger.debug(
