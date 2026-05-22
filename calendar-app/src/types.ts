@@ -14,6 +14,7 @@ export interface CalendarEvent {
   description?: string;
   location?: string;
   memberId?: string;
+  recurrenceId?: string;
 }
 
 export type ViewMode = "week" | "month";
@@ -33,4 +34,5 @@ export interface TodoItem {
   category: string;
   completed: boolean;
   createdAt: number;
+  memberId?: string;
 }

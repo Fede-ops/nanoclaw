@@ -68,22 +68,6 @@ function toolbarBtn(iconKey: keyof typeof ICONS, label: string, action: string):
   </button>`;
 }
 
-function tabBar(activeKey = "kalender"): string {
-  const items = [
-    { key: "kalender", icon: "home" as const, label: "Kalender" },
-    { key: "todo", icon: "todo" as const, label: "To-Do" },
-    { key: "einkauf", icon: "cart" as const, label: "Einkauf" },
-  ];
-  return `<nav class="tab-bar">${items
-    .map(
-      (it) =>
-        `<button class="tab-bar__item${it.key === activeKey ? " tab-bar__item--active" : ""}" data-action="tab-${it.key}">
-          <span class="tab-bar__icon">${ICONS[it.icon]}</span>
-          <span class="tab-bar__label">${it.label}</span>
-        </button>`
-    )
-    .join("")}</nav>`;
-}
 
 function renderEvent(event: CalendarEvent, member?: FamilyMember): string {
   const accent = member?.color ?? "#8E8E93";
@@ -105,10 +89,11 @@ export interface WeekViewState {
   events: CalendarEvent[];
   members: FamilyMember[];
   today: Date;
+  filterActive?: boolean;
 }
 
 export function renderWeekView(viewState: WeekViewState): string {
-  const { weekStart, events, members, today } = viewState;
+  const { weekStart, events, members, today, filterActive } = viewState;
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const end = addDays(weekStart, 6);
@@ -121,7 +106,11 @@ export function renderWeekView(viewState: WeekViewState): string {
 
   const rows = days
     .map((day) => {
-      const dayEvents = events.filter((e) => isSameDay(e.start, day));
+      const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+      const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+      const dayEvents = events.filter((e) =>
+        e.start < dayEnd && (e.allDay ? e.end >= dayStart : e.end > dayStart)
+      );
       const isToday = isSameDay(day, today);
       const eventsHtml = dayEvents.length
         ? dayEvents.map((e) => renderEvent(e, members.find((m) => m.id === e.memberId))).join("")
@@ -137,21 +126,24 @@ export function renderWeekView(viewState: WeekViewState): string {
     .join("");
 
   return `
-    <header class="header">
-      <button class="header__back" data-action="nav-prev">${ICONS.back}</button>
-      <h1 class="header__title">${title}</h1>
-      <button class="header__action" data-action="view-month">${ICONS.month}</button>
-    </header>
-    <nav class="toolbar">
-      ${toolbarBtn("back", "Zurück", "nav-prev")}
-      ${toolbarBtn("today", "Heute", "nav-today")}
-      ${toolbarBtn("next", "Weiter", "nav-next")}
-      ${toolbarBtn("month", "Monat", "view-month")}
-      ${toolbarBtn("filter", "Filter", "filter")}
-      ${toolbarBtn("search", "Suche", "search")}
-    </nav>
-    <main class="week-list">${rows}</main>
-    <button class="fab" data-action="add-event">${ICONS.plus}</button>
-    ${tabBar("kalender")}
+    <div class="sticky-nav">
+      <header class="header">
+        <button class="header__back" data-action="nav-prev">${ICONS.back}</button>
+        <h1 class="header__title">${title}</h1>
+        <button class="header__action" data-action="view-month">${ICONS.month}</button>
+      </header>
+      <nav class="toolbar">
+        ${toolbarBtn("back", "Zurück", "nav-prev")}
+        ${toolbarBtn("today", "Heute", "nav-today")}
+        ${toolbarBtn("next", "Weiter", "nav-next")}
+        ${toolbarBtn("month", "Monat", "view-month")}
+        <button class="toolbar__button${filterActive ? " toolbar__button--active" : ""}" data-action="filter">
+          <span class="toolbar__icon">${ICONS.filter}${filterActive ? `<span class="toolbar__badge"></span>` : ""}</span>
+          <span class="toolbar__label">Filter</span>
+        </button>
+        ${toolbarBtn("search", "Suche", "search")}
+      </nav>
+    </div>
+    <div class="slide-viewport"><main class="week-list">${rows}</main></div>
   `;
 }

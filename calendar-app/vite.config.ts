@@ -3,15 +3,22 @@ import { VitePWA } from "vite-plugin-pwa";
 
 // When deploying to GitHub Pages set VITE_DEPLOY_BASE=/nanoclaw/
 const base = process.env.VITE_DEPLOY_BASE ?? "/";
+const buildTime = new Date().toISOString();
 
 export default defineConfig({
   base,
+  define: {
+    __BUILD_TIME__: JSON.stringify(buildTime),
+  },
   server: {
     host: true,
     port: 5173,
   },
   plugins: [
     VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
       registerType: "autoUpdate",
       manifest: {
         name: "Familienkalender",

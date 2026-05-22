@@ -62,7 +62,16 @@ export class HAClient {
       else errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
     }
     if (errors.length > 0 && events.length === 0) throw new Error(errors[0]);
-    return events.sort((a, b) => a.start.getTime() - b.start.getTime());
+    // Dedup only by HA uid — fingerprint dedup is done in the caller AFTER
+    // the pendingDeletes filter so that hidden events can correctly suppress
+    // sibling duplicates that share the same (entity+start+summary) fingerprint.
+    const seenUid = new Set<string>();
+    const deduped = events.filter((e) => {
+      if (seenUid.has(e.uid)) return false;
+      seenUid.add(e.uid);
+      return true;
+    });
+    return deduped.sort((a, b) => a.start.getTime() - b.start.getTime());
   }
 
   async createEvent(
@@ -109,7 +118,7 @@ export class HAClient {
     end: Date,
     allDay: boolean,
     opts?: { location?: string; description?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pad = (n: number) => String(n).padStart(2, "0");
     const fmtDate = (d: Date) =>
       `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -135,43 +144,102 @@ export class HAClient {
       },
       body: JSON.stringify(body),
     });
+    if (res.status === 400) return false; // not supported by this calendar backend
     if (!res.ok) throw new Error(`HA update_event failed: ${res.status}`);
+    return true;
   }
 
-  async deleteEvent(entityId: string, uid: string): Promise<void> {
+  async deleteEvent(entityId: string, uid: string, recurrenceId?: string): Promise<void> {
+    const body: Record<string, string> = { entity_id: entityId, uid };
+    // Recurring event instances require recurrence_id + range so HA knows
+    // which occurrence to delete — without these, HA returns 400.
+    if (recurrenceId) {
+      body.recurrence_id = recurrenceId;
+      body.range = "this_event";
+    }
     const res = await fetch(`${this.config.baseUrl}/api/services/calendar/delete_event`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.config.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ entity_id: entityId, uid }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`HA delete_event failed: ${res.status}`);
+    if (!res.ok) {
+      // Read once as text so we get whatever HA returned — JSON error body,
+      // HTML error page, or plain text. Then surface it verbatim instead of
+      // collapsing to res.statusText, which loses the actual reason.
+      let body = "";
+      try { body = (await res.text()).trim(); } catch { /* ignore */ }
+      // Many HA service errors look like {"message":"..."} — extract that
+      // single field if present, otherwise keep the raw body.
+      let detail = body;
+      try {
+        const parsed = JSON.parse(body) as { message?: string };
+        if (parsed && typeof parsed.message === "string") detail = parsed.message;
+      } catch { /* not JSON, keep raw */ }
+      const err = new Error(
+        `HA delete_event ${res.status} ${res.statusText}: ${detail || "(leerer Body)"} ` +
+        `(entity=${entityId} uid=${uid})`,
+      );
+      (err as Error & { httpStatus: number }).httpStatus = res.status;
+      throw err;
+    }
+  }
+
+  // Diagnostic: return whatever HA knows about a calendar entity so the
+  // user can confirm which integration is providing it.
+  async getEntityState(entityId: string): Promise<unknown> {
+    return this.request(`/api/states/${entityId}`);
   }
 }
 
 interface RawHAEvent {
   summary: string;
   uid?: string;
+  recurrence_id?: string;
   description?: string;
   location?: string;
   start: { dateTime?: string; date?: string };
   end: { dateTime?: string; date?: string };
 }
 
+function parseDateStr(str: string): Date {
+  // Date-only strings (e.g. "2026-05-23") must be parsed as local midnight,
+  // not UTC midnight — otherwise timezone shifts cause wrong day comparisons.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const [y, m, d] = str.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return new Date(str);
+}
+
 function normalizeEvent(raw: RawHAEvent, calendarId: string): CalendarEvent {
   const allDay = Boolean(raw.start.date && !raw.start.dateTime);
   const startStr = raw.start.dateTime ?? raw.start.date!;
   const endStr = raw.end.dateTime ?? raw.end.date!;
+  const startDate = parseDateStr(startStr);
+  const startMs = startDate.getTime();
+  let endDate = parseDateStr(endStr);
+  // HA's local calendar uses inclusive end dates, but events created via the
+  // iCal/email route arrive with exclusive ends (end = last_day + 1). When
+  // an all-day event's end is exactly 1 day after start, that's the exclusive
+  // single-day pattern — normalise it to inclusive so the filter (>=) works
+  // uniformly. Multi-day inclusive events have a gap > 1 day and are unchanged.
+  if (allDay && endDate.getTime() - startDate.getTime() === 86_400_000) {
+    endDate = startDate;
+  }
   return {
-    uid: raw.uid ?? `${calendarId}-${startStr}-${raw.summary}`,
+    // Use epoch ms (not the raw string) so the fallback UID is stable
+    // regardless of whether HA returns "+02:00" or "Z" timezone format.
+    uid: raw.uid ?? `${calendarId}-${startMs}-${raw.summary}`,
     summary: raw.summary,
-    start: new Date(startStr),
-    end: new Date(endStr),
+    start: startDate,
+    end: endDate,
     allDay,
     description: raw.description,
     location: raw.location,
     memberId: calendarId,
+    recurrenceId: raw.recurrence_id,
   };
 }
